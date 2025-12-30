@@ -3,22 +3,29 @@
 #include <string>
 #include <algorithm>
 #include <sstream>
+#include <memory>
+#include<ranges>
 
 using namespace std;
 
-// User profile data
+// Data Model
 struct UserProfile {
-    string university;
-    string student_id;
-    string major;
-    string routine;
-    vector<string> study_habits;
+    string university, student_id, major, routine;
     vector<string> interests;
-    vector<string> lifestyle;
     bool premium = false;
 };
 
-// Helper function to get user input
+// Template Validator with function pointer
+template<typename T>
+class Validator {
+    bool (*check)(const T&);
+    string msg;
+public:
+    Validator(bool (*c)(const T&), string m) : check(c), msg(m) {}
+    bool isValid(const T& val) const { return check(val); }
+    string getMessage() const { return msg; }
+};
+
 string getInput(const string& prompt) {
     cout << prompt;
     string input;
@@ -26,188 +33,160 @@ string getInput(const string& prompt) {
     return input;
 }
 
-// Helper to convert string to lowercase
-string toLower(string s) {
-    transform(s.begin(), s.end(), s.begin(), ::tolower);
-    return s;
-}
+// Base class with pure virtual functions
+class FormStep {
+public:
+    virtual ~FormStep() = default;
+    virtual bool execute(UserProfile& profile) = 0;
+    virtual string getTitle() const = 0;
+};
 
-// Parse comma-separated numbers into selected options
-vector<string> parseChoices(const string& input, const vector<string>& options) {
-    vector<string> result;
-    stringstream ss(input);
-    string token;
+// University Step - uses Ranges
+class UniversityStep : public FormStep {
+    vector<string> universities;
+public:
+    UniversityStep(vector<string> unis) : universities(move(unis)) {}
+    string getTitle() const override { return "Select University"; }
     
-    while (getline(ss, token, ',')) {
-        try {
-            int choice = stoi(token);
-            if (choice >= 1 && choice <= (int)options.size()) {
-                result.push_back(options[choice - 1]);
-            }
-        } catch (...) {}
-    }
-    return result;
-}
-
-// Step 1: Select University
-void selectUniversity(UserProfile& profile, const vector<string>& universities) {
-    cout << "\n===== Select University =====\n";
-    cout << "Search or press Enter to list all:\n";
-    
-    while (true) {
-        string query = getInput("Search: ");
-        string lowerQuery = toLower(query);
+    bool execute(UserProfile& p) override {
+        cout << "\n===== " << getTitle() << " =====\n";
+        string query = getInput("Search university (or Enter for all): ");
         
-        vector<string> matches;
-        for (const auto& uni : universities) {
-            if (query.empty() || toLower(uni).find(lowerQuery) != string::npos) {
-                matches.push_back(uni);
-            }
-        }
+        // C++20 ranges with lambda
+        auto filtered = universities | views::filter([&](const string& u) {
+            if (query.empty()) return true;
+            string lower_u = u, lower_q = query;
+            ranges::transform(lower_u, lower_u.begin(), ::tolower);
+            ranges::transform(lower_q, lower_q.begin(), ::tolower);
+            return lower_u.find(lower_q) != string::npos;
+        });
         
-        if (matches.empty()) {
-            cout << "No matches found. Try again.\n";
-            continue;
-        }
-        
-        for (size_t i = 0; i < matches.size(); i++) {
+        vector<string> matches(filtered.begin(), filtered.end());
+        for (size_t i = 0; i < matches.size(); i++)
             cout << i + 1 << ") " << matches[i] << "\n";
+        
+        int choice = stoi(getInput("Choose: "));
+        if (choice >= 1 && choice <= (int)matches.size()) {
+            p.university = matches[choice - 1];
+            return true;
         }
-        
-        string choice = getInput("Enter number (or 'r' to search again): ");
-        if (choice == "r") continue;
-        
-        try {
-            int idx = stoi(choice);
-            if (idx >= 1 && idx <= (int)matches.size()) {
-                profile.university = matches[idx - 1];
-                cout << "Selected: " << profile.university << "\n";
-                return;
+        return false;
+    }
+};
+
+// Student ID Step - uses Template
+class StudentIDStep : public FormStep {
+    Validator<string> validator;
+    static bool validateID(const string& s) { return s.length() >= 3; }
+public:
+    StudentIDStep() : validator(validateID, "ID must be 3+ characters") {}
+    string getTitle() const override { return "Enter Student ID"; }
+    
+    bool execute(UserProfile& p) override {
+        cout << "\n===== " << getTitle() << " =====\n";
+        while (true) {
+            string id = getInput("Student ID: ");
+            if (validator.isValid(id)) {
+                p.student_id = id;
+                return true;
             }
-        } catch (...) {}
+            cout << validator.getMessage() << "\n";
+        }
+    }
+};
+
+// Profile Step - uses STL containers
+class ProfileStep : public FormStep {
+    vector<string> parseChoices(const string& input, const vector<string>& opts) {
+        vector<string> result;
+        stringstream ss(input);
+        string token;
+        while (getline(ss, token, ',')) {
+            try {
+                int c = stoi(token);
+                if (c >= 1 && c <= (int)opts.size()) result.push_back(opts[c - 1]);
+            } catch (...) {}
+        }
+        return result;
+    }
+public:
+    string getTitle() const override { return "Profile Details"; }
+    
+    bool execute(UserProfile& p) override {
+        cout << "\n===== " << getTitle() << " =====\n";
+        p.major = getInput("Major: ");
         
-        cout << "Invalid choice.\n";
+        cout << "Routine: 1) Early Bird  2) Night Owl\n";
+        p.routine = (getInput("Choose: ") == "1") ? "Early Bird" : "Night Owl";
+        
+        vector<string> interestOpts = {"Sports", "Coding", "Music", "Debate"};
+        cout << "Interests:\n";
+        for (size_t i = 0; i < interestOpts.size(); i++)
+            cout << i + 1 << ") " << interestOpts[i] << "\n";
+        p.interests = parseChoices(getInput("Choose (comma-separated): "), interestOpts);
+        return true;
     }
-}
+};
 
-// Step 2: Enter Student ID
-void enterStudentID(UserProfile& profile) {
-    cout << "\n===== Enter Student ID =====\n";
-    while (true) {
-        string id = getInput("Student ID (at least 3 characters): ");
-        if (id.length() >= 3) {
-            profile.student_id = id;
-            return;
-        }
-        cout << "ID too short. Try again.\n";
+// Premium Step - uses function pointer
+class PremiumStep : public FormStep {
+    void (*callback)(const UserProfile&);
+public:
+    PremiumStep(void (*cb)(const UserProfile&)) : callback(cb) {}
+    string getTitle() const override { return "Premium Subscription"; }
+    
+    bool execute(UserProfile& p) override {
+        cout << "\n===== " << getTitle() << " =====\n";
+        cout << "Premium: Enhanced visibility & unlimited connections\n";
+        cout << "1) Enable Premium  2) Free account\n";
+        p.premium = (getInput("Choose: ") == "1");
+        if (callback) callback(p);
+        return true;
     }
-}
+};
 
-// Step 3: Complete Profile
-void completeProfile(UserProfile& profile) {
-    cout << "\n===== Profile Details =====\n";
-    
-    profile.major = getInput("Major/Department: ");
-    
-    cout << "\nDaily Routine:\n1) Early Bird\n2) Night Owl\n";
-    while (true) {
-        string choice = getInput("Choose 1 or 2: ");
-        if (choice == "1") { profile.routine = "Early Bird"; break; }
-        if (choice == "2") { profile.routine = "Night Owl"; break; }
-        cout << "Invalid choice.\n";
-    }
-    
-    vector<string> habitOptions = {"Group Study", "Solo Study", "Pomodoro", 
-                                    "Last-minute cramming", "Regular review"};
-    cout << "\nStudy Habits (enter numbers separated by commas):\n";
-    for (size_t i = 0; i < habitOptions.size(); i++) {
-        cout << i + 1 << ") " << habitOptions[i] << "\n";
-    }
-    profile.study_habits = parseChoices(getInput("Your choices: "), habitOptions);
-    
-    vector<string> interestOptions = {"Sports", "Coding", "Volunteering", 
-                                       "Music", "Debate", "Entrepreneurship"};
-    cout << "\nInterests (enter numbers separated by commas):\n";
-    for (size_t i = 0; i < interestOptions.size(); i++) {
-        cout << i + 1 << ") " << interestOptions[i] << "\n";
-    }
-    profile.interests = parseChoices(getInput("Your choices: "), interestOptions);
-    
-    vector<string> lifestyleOptions = {"Non-smoker", "Vegan/Vegetarian", 
-                                        "Fitness Enthusiast", "Gamer", "Night-social"};
-    cout << "\nLifestyle (enter numbers separated by commas):\n";
-    for (size_t i = 0; i < lifestyleOptions.size(); i++) {
-        cout << i + 1 << ") " << lifestyleOptions[i] << "\n";
-    }
-    profile.lifestyle = parseChoices(getInput("Your choices: "), lifestyleOptions);
-}
-
-// Step 4: Premium Subscription
-void offerPremium(UserProfile& profile) {
-    cout << "\n===== Premium Subscription =====\n";
-    cout << "Upgrade to Premium (optional):\n";
-    cout << " - Enhanced profile visibility\n";
-    cout << " - Unlimited peer connections\n";
-    cout << " - Premium badge\n\n";
-    cout << "1) Yes - Enable Premium\n2) Not now\n";
-    
-    while (true) {
-        string choice = getInput("Choose 1 or 2: ");
-        if (choice == "1") {
-            profile.premium = true;
-            cout << "Premium enabled!\n";
-            return;
-        }
-        if (choice == "2") {
-            profile.premium = false;
-            cout << "Continuing with free account.\n";
-            return;
-        }
-        cout << "Invalid choice.\n";
-    }
-}
-
-// Display summary
-void showSummary(const UserProfile& profile) {
-    cout << "\n===== Summary =====\n";
-    cout << "University: " << profile.university << "\n";
-    cout << "Student ID: " << profile.student_id << "\n";
-    cout << "Major: " << profile.major << "\n";
-    cout << "Routine: " << profile.routine << "\n";
-    
-    cout << "Study Habits: ";
-    for (const auto& h : profile.study_habits) cout << h << ", ";
-    cout << "\n";
-    
-    cout << "Interests: ";
-    for (const auto& i : profile.interests) cout << i << ", ";
-    cout << "\n";
-    
-    cout << "Lifestyle: ";
-    for (const auto& l : profile.lifestyle) cout << l << ", ";
-    cout << "\n";
-    
-    cout << "Premium: " << (profile.premium ? "Yes" : "No") << "\n";
-}
-
-int main() {
-    vector<string> universities = {
-        "IBA Karachi", "LUMS Lahore", "NED University", "UET Lahore",
-        "University of Karachi", "Sukkur IBA", 
-        "Quaid-e-Azam University", "FAST-NU Lahore"
-    };
-    
+// Onboarding Manager
+class OnboardingFlow {
+    vector<unique_ptr<FormStep>> steps;
     UserProfile profile;
     
-    cout << "Welcome to CampusConnect Onboarding\n";
+    void showSummary() {
+        cout << "\n===== Summary =====\n";
+        cout << "University: " << profile.university << "\n";
+        cout << "Student ID: " << profile.student_id << "\n";
+        cout << "Major: " << profile.major << "\n";
+        cout << "Routine: " << profile.routine << "\n";
+        cout << "Interests: ";
+        for (const auto& i : profile.interests) cout << i << " ";
+        cout << "\nPremium: " << (profile.premium ? "Yes" : "No") << "\n";
+    }
+public:
+    OnboardingFlow(vector<string> universities) {
+        steps.push_back(make_unique<UniversityStep>(move(universities)));
+        steps.push_back(make_unique<StudentIDStep>());
+        steps.push_back(make_unique<ProfileStep>());
+        steps.push_back(make_unique<PremiumStep>([](const UserProfile& p) {
+            cout << "[Callback] Done for " << p.student_id << "\n";
+        }));
+    }
     
-    selectUniversity(profile, universities);
-    enterStudentID(profile);
-    completeProfile(profile);
-    offerPremium(profile);
-    
-    showSummary(profile);
-    
-    cout << "\nThank you for joining CampusConnect!\n";
+    void run() {
+        cout << "Welcome to CampusConnect\n";
+        for (auto& step : steps) {
+            if (!step->execute(profile)) {
+                cout << "Cancelled.\n";
+                return;
+            }
+        }
+        showSummary();
+    }
+};
+
+int main() {
+    vector<string> universities = {"IBA Karachi", "LUMS Lahore", "NED University", 
+                                    "UET Lahore", "University of Karachi"};
+    OnboardingFlow flow(universities);
+    flow.run();
+    cout << "\nThank you!\n";
     return 0;
 }
